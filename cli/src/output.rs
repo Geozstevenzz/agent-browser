@@ -1238,7 +1238,8 @@ agent-browser select - Select a dropdown option
 
 Usage: agent-browser select <selector> <value...>
 
-Selects one or more options in a <select> dropdown by value.
+Selects one or more options in a dropdown. Supports native <select> elements
+and ARIA combobox widgets (role=combobox).
 
 Global Options:
   --json               Output as JSON
