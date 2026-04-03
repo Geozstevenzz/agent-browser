@@ -34,6 +34,7 @@ fn native_test_fixture_html(name: &str) -> &'static str {
         "drag_probe" => include_str!("test_fixtures/drag_probe.html"),
         "html5_drag_probe" => include_str!("test_fixtures/html5_drag_probe.html"),
         "pointer_capture_probe" => include_str!("test_fixtures/pointer_capture_probe.html"),
+        "file_chooser_probe" => include_str!("test_fixtures/file_chooser_probe.html"),
         _ => panic!("Unknown native test fixture: {}", name),
     }
 }
@@ -3825,6 +3826,7 @@ async fn e2e_externally_opened_tab_detected() {
 
 // ---------------------------------------------------------------------------
 // Stream: custom viewport is reflected in screencast frame metadata
+// File chooser: dynamic input upload without selector
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -3856,6 +3858,8 @@ async fn e2e_stream_frame_metadata_respects_custom_viewport() {
 async fn e2e_offscreen_scroll_before_interactions() {
     let mut state = DaemonState::new();
 
+async fn e2e_file_chooser_upload_dynamic_input() {
+    let mut state = DaemonState::new();
     let resp = execute_command(
         &json!({ "id": "1", "action": "launch", "headless": true }),
         &mut state,
@@ -3880,6 +3884,9 @@ async fn e2e_offscreen_scroll_before_interactions() {
                 </body></html>
             "##,
         }),
+    let url = native_test_fixture_url("file_chooser_probe");
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": url }),
         &mut state,
     )
     .await;
@@ -3888,6 +3895,13 @@ async fn e2e_offscreen_scroll_before_interactions() {
     // -- click --
     let resp = execute_command(
         &json!({ "id": "3", "action": "click", "selector": "#click-btn" }),
+    let tmp_file = std::env::temp_dir().join("e2e_upload_test.txt");
+    std::fs::write(&tmp_file, "test content").expect("Failed to create temp file");
+    let tmp_path = tmp_file.to_str().unwrap();
+
+    // Click the dynamic upload button — triggers file chooser
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "click", "selector": "#dynamic-upload" }),
         &mut state,
     )
     .await;
@@ -3895,6 +3909,11 @@ async fn e2e_offscreen_scroll_before_interactions() {
 
     let resp = execute_command(
         &json!({ "id": "4", "action": "evaluate", "script": "document.title" }),
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+    // Upload without selector — should use pending file chooser
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "upload", "files": [tmp_path] }),
         &mut state,
     )
     .await;
@@ -3908,6 +3927,13 @@ async fn e2e_offscreen_scroll_before_interactions() {
     // -- hover --
     let resp = execute_command(
         &json!({ "id": "5", "action": "hover", "selector": "#hover-btn" }),
+    let data = get_data(&resp);
+    assert_eq!(data["uploaded"], 1);
+    assert_eq!(data["fileChooser"], true);
+
+    // Verify the file was received by the page
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "evaluate", "script": "document.getElementById('result').textContent" }),
         &mut state,
     )
     .await;
@@ -4098,6 +4124,16 @@ fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
         "Pointer should have moved over the off-screen drop target during drag"
     );
 
+    let result_text = get_data(&resp)["result"].as_str().unwrap_or("");
+    assert!(
+        result_text.contains("e2e_upload_test.txt"),
+        "Page should show uploaded filename, got: {}",
+        result_text
+    );
+
+    assert!(state.pending_file_chooser.is_none());
+
+    let _ = std::fs::remove_file(&tmp_file);
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     assert_success(&resp);
 }

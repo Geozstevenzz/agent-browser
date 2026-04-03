@@ -211,6 +211,10 @@ pub struct DaemonState {
     pub mouse_state: MouseState,
     /// Tracks the currently open JavaScript dialog (alert/confirm/prompt), if any.
     pub pending_dialog: Option<PendingDialog>,
+    /// Tracks an open file chooser dialog's backendNodeId from `Page.fileChooserOpened`.
+    /// Consumed by `upload` when called without a selector.
+    /// Must be cleared alongside `ref_map` whenever the active page changes.
+    pub pending_file_chooser: Option<i64>,
     /// When true, automatically dismiss `beforeunload` dialogs and accept `alert`
     /// dialogs so they never block the agent.  Enabled by default.
     pub auto_dialog: bool,
@@ -261,6 +265,7 @@ impl DaemonState {
             dialog_handler_task: None,
             mouse_state: MouseState::default(),
             pending_dialog: None,
+            pending_file_chooser: None,
             auto_dialog: !matches!(
                 env::var("AGENT_BROWSER_NO_AUTO_DIALOG").as_deref(),
                 Ok("1" | "true" | "yes")
@@ -1002,6 +1007,10 @@ impl DaemonState {
                         "Page.javascriptDialogClosed" => {
                             self.pending_dialog = None;
                         }
+                        "Page.fileChooserOpened" => {
+                            self.pending_file_chooser =
+                                event.params.get("backendNodeId").and_then(|v| v.as_i64());
+                        }
                         // Fetch.requestPaused is handled by the background
                         // fetch_handler_task — no need to collect here.
                         _ => {}
@@ -1264,7 +1273,14 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
         "geolocation" => handle_geolocation(cmd, state).await,
         "permissions" => handle_permissions(cmd, state).await,
         "dialog" => handle_dialog(cmd, state).await,
-        "upload" => handle_upload(cmd, state).await,
+        "upload" => {
+            let no_selector = cmd.get("selector").and_then(|v| v.as_str()).is_none();
+            let result = handle_upload(cmd, state).await;
+            if no_selector {
+                state.pending_file_chooser = None;
+            }
+            result
+        }
         "addscript" => handle_addscript(cmd, state).await,
         "addinitscript" => handle_addinitscript(cmd, state).await,
         "addstyle" => handle_addstyle(cmd, state).await,
@@ -1902,6 +1918,7 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     if let Some(ref wb) = state.webdriver_backend {
         if state.browser.is_none() {
             state.ref_map.clear();
+            state.pending_file_chooser = None;
             wb.navigate(url).await?;
             let new_url = wb.get_url().await.unwrap_or_else(|_| url.to_string());
             let title = wb.get_title().await.unwrap_or_default();
@@ -1962,6 +1979,7 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     state.ref_map.clear();
     state.iframe_sessions.clear();
     state.active_frame_id = None;
+    state.pending_file_chooser = None;
     mgr.navigate(url, wait_until).await
 }
 
@@ -2123,6 +2141,7 @@ async fn handle_close(state: &mut DaemonState) -> Result<Value, String> {
     }
 
     state.ref_map.clear();
+    state.pending_file_chooser = None;
     Ok(json!({ "closed": true }))
 }
 
@@ -2357,6 +2376,7 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
 
         let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
         state.ref_map.clear();
+        state.pending_file_chooser = None;
         mgr.tab_new(Some(&href)).await?;
 
         return Ok(json!({ "clicked": selector, "newTab": true, "url": href }));
@@ -2819,6 +2839,7 @@ async fn handle_back(state: &mut DaemonState) -> Result<Value, String> {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             let url = wb.get_url().await.unwrap_or_default();
             state.ref_map.clear();
+            state.pending_file_chooser = None;
             return Ok(json!({ "url": url }));
         }
     }
@@ -2827,6 +2848,7 @@ async fn handle_back(state: &mut DaemonState) -> Result<Value, String> {
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     let url = mgr.get_url().await.unwrap_or_default();
     state.ref_map.clear();
+    state.pending_file_chooser = None;
     Ok(json!({ "url": url }))
 }
 
@@ -2837,6 +2859,7 @@ async fn handle_forward(state: &mut DaemonState) -> Result<Value, String> {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             let url = wb.get_url().await.unwrap_or_default();
             state.ref_map.clear();
+            state.pending_file_chooser = None;
             return Ok(json!({ "url": url }));
         }
     }
@@ -2845,6 +2868,7 @@ async fn handle_forward(state: &mut DaemonState) -> Result<Value, String> {
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     let url = mgr.get_url().await.unwrap_or_default();
     state.ref_map.clear();
+    state.pending_file_chooser = None;
     Ok(json!({ "url": url }))
 }
 
@@ -2855,6 +2879,7 @@ async fn handle_reload(state: &mut DaemonState) -> Result<Value, String> {
             tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
             let url = wb.get_url().await.unwrap_or_default();
             state.ref_map.clear();
+            state.pending_file_chooser = None;
             return Ok(json!({ "url": url }));
         }
     }
@@ -2885,6 +2910,7 @@ async fn handle_reload(state: &mut DaemonState) -> Result<Value, String> {
 
     let url = mgr.get_url().await.unwrap_or_default();
     state.ref_map.clear();
+    state.pending_file_chooser = None;
     Ok(json!({ "url": url }))
 }
 
@@ -3438,6 +3464,7 @@ async fn handle_tab_new(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
     state.ref_map.clear();
     state.iframe_sessions.clear();
     state.active_frame_id = None;
+    state.pending_file_chooser = None;
     mgr.tab_new(url).await
 }
 
@@ -3450,6 +3477,7 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
     state.ref_map.clear();
     state.iframe_sessions.clear();
     state.active_frame_id = None;
+    state.pending_file_chooser = None;
     let result = mgr.tab_switch(index).await?;
 
     if let Some(ref server) = state.stream_server {
@@ -3482,6 +3510,7 @@ async fn handle_tab_close(cmd: &Value, state: &mut DaemonState) -> Result<Value,
     state.ref_map.clear();
     state.iframe_sessions.clear();
     state.active_frame_id = None;
+    state.pending_file_chooser = None;
     mgr.tab_close(index).await
 }
 
@@ -4341,10 +4370,7 @@ async fn handle_dialog(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
 
 async fn handle_upload(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
-    let selector = cmd
-        .get("selector")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing 'selector' parameter")?;
+    let selector = cmd.get("selector").and_then(|v| v.as_str());
 
     let files: Vec<String> = cmd
         .get("files")
@@ -4361,8 +4387,17 @@ async fn handle_upload(cmd: &Value, state: &DaemonState) -> Result<Value, String
         })
         .unwrap_or_default();
 
-    mgr.upload_files(selector, &files).await?;
-    Ok(json!({ "uploaded": files.len(), "selector": selector }))
+    if let Some(sel) = selector {
+        mgr.upload_files(sel, &files).await?;
+        Ok(json!({ "uploaded": files.len(), "selector": sel }))
+    } else {
+        let backend_node_id = state.pending_file_chooser.ok_or(
+            "No file chooser dialog is open. Either provide a selector or trigger a file chooser first (e.g., click a file upload button).",
+        )?;
+        mgr.upload_files_for_chooser(backend_node_id, &files)
+            .await?;
+        Ok(json!({ "uploaded": files.len(), "fileChooser": true }))
+    }
 }
 
 async fn handle_addscript(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
@@ -5777,6 +5812,7 @@ async fn handle_window_new(cmd: &Value, state: &mut DaemonState) -> Result<Value
 
     let total = mgr.page_count();
     state.ref_map.clear();
+    state.pending_file_chooser = None;
 
     Ok(json!({ "index": total - 1, "total": total }))
 }
