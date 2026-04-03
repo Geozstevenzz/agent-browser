@@ -3851,6 +3851,73 @@ async fn e2e_stream_frame_metadata_respects_custom_viewport() {
     // Enable stream on an ephemeral port
     let resp = execute_command(
         &json!({ "id": "1", "action": "stream_enable", "port": 0 }),
+#[tokio::test]
+#[ignore]
+async fn e2e_offscreen_scroll_before_interactions() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "2",
+            "action": "setcontent",
+            "html": r##"
+                <html><body>
+                  <div style="height: 5000px;">spacer</div>
+                  <button id="click-btn" onclick="document.title='clicked'">Click Target</button>
+                  <button id="hover-btn" onmouseover="this.dataset.hovered='true'">Hover Target</button>
+                  <a href="#" onclick="event.preventDefault(); document.title='ref-clicked'">Ref Link</a>
+                  <button id="tap-btn" ontouchstart="document.title='tapped'">Tap Target</button>
+                  <div id="drag-source" style="width:50px;height:50px;background:red;">Source</div>
+                  <div id="drop-target" style="width:50px;height:50px;background:blue;"
+                       onpointerover="this.dataset.draggedOver='true'">Target</div>
+                </body></html>
+            "##,
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // -- click --
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "click", "selector": "#click-btn" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "document.title" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        "clicked",
+        "Click handler should have fired on the off-screen button"
+    );
+
+    // -- hover --
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "hover", "selector": "#hover-btn" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({
+            "id": "6", "action": "evaluate",
+            "script": "document.getElementById('hover-btn').dataset.hovered"
+        }),
         &mut state,
     )
     .await;
@@ -3862,6 +3929,29 @@ async fn e2e_stream_frame_metadata_respects_custom_viewport() {
     // Set a custom viewport before launching the browser
     let resp = execute_command(
         &json!({ "id": "2", "action": "viewport", "width": 800, "height": 600 }),
+    assert_eq!(
+        get_data(&resp)["result"],
+        "true",
+        "Hover handler should have fired on the off-screen button"
+    );
+
+    // -- click by ref --
+    let resp = execute_command(&json!({ "id": "7", "action": "snapshot" }), &mut state).await;
+    assert_success(&resp);
+    let snapshot = get_data(&resp)["snapshot"].as_str().unwrap();
+
+    let ref_id = snapshot
+        .lines()
+        .find(|line| line.contains("Ref Link"))
+        .and_then(|line| {
+            line.split("ref=")
+                .nth(1)
+                .and_then(|s| s.split(|c: char| !c.is_alphanumeric()).next())
+        })
+        .expect("Should find ref for Ref Link");
+
+    let resp = execute_command(
+        &json!({ "id": "8", "action": "click", "selector": ref_id }),
         &mut state,
     )
     .await;
@@ -3875,6 +3965,21 @@ async fn e2e_stream_frame_metadata_respects_custom_viewport() {
     // Navigate to trigger browser launch and screencast
     let resp = execute_command(
         &json!({ "id": "3", "action": "navigate", "url": "data:text/html,<h1>Viewport Test</h1>" }),
+    let resp = execute_command(
+        &json!({ "id": "9", "action": "evaluate", "script": "document.title" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        "ref-clicked",
+        "Click via ref should have fired on the off-screen element"
+    );
+
+    // -- tap --
+    let resp = execute_command(
+        &json!({ "id": "10", "action": "tap", "selector": "#tap-btn" }),
         &mut state,
     )
     .await;
@@ -3943,6 +4048,21 @@ async fn e2e_stream_frame_metadata_respects_custom_viewport() {
     // Cleanup
     let resp = execute_command(
         &json!({ "id": "4", "action": "stream_disable" }),
+    let resp = execute_command(
+        &json!({ "id": "11", "action": "evaluate", "script": "document.title" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        "tapped",
+        "Tap handler should have fired on the off-screen button"
+    );
+
+    // -- drag (uses pointer events, not HTML5 drag & drop) --
+    let resp = execute_command(
+        &json!({ "id": "12", "action": "drag", "source": "#drag-source", "target": "#drop-target" }),
         &mut state,
     )
     .await;
@@ -3963,4 +4083,21 @@ fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
         }
     }
     None
+    let resp = execute_command(
+        &json!({
+            "id": "13", "action": "evaluate",
+            "script": "document.getElementById('drop-target').dataset.draggedOver"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        "true",
+        "Pointer should have moved over the off-screen drop target during drag"
+    );
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
 }
