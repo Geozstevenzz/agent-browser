@@ -141,6 +141,8 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         "--metrics-recording-only".to_string(),
         "--password-store=basic".to_string(),
         "--use-mock-keychain".to_string(),
+        // Stealth: hide automation signals from bot detection
+        "--disable-blink-features=AutomationControlled".to_string(),
     ];
 
     let has_extensions = options
@@ -204,7 +206,11 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         args.push(format!("--window-size={},{}", w, h));
     }
 
-    args.extend(options.args.iter().cloned());
+    for arg in &options.args {
+        if !arg.starts_with("--enable-automation") {
+            args.push(arg.clone());
+        }
+    }
 
     if should_disable_sandbox(&args) {
         args.push("--no-sandbox".to_string());
