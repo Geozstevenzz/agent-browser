@@ -3418,7 +3418,8 @@ async fn handle_keyboard(cmd: &Value, state: &DaemonState) -> Result<Value, Stri
                 .get("text")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing 'text' parameter")?;
-            interaction::type_text_into_active_context(&mgr.client, &session_id, text, None)
+            let delay = cmd.get("delay").and_then(|v| v.as_u64());
+            interaction::type_text_into_active_context(&mgr.client, &session_id, text, delay)
                 .await?;
             return Ok(json!({ "typed": text }));
         }

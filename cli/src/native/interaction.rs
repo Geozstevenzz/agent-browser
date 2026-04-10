@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use rand::Rng;
 use serde_json::{json, Value};
 
 use super::cdp::client::CdpClient;
@@ -264,7 +265,8 @@ pub async fn type_text_into_active_context(
     text: &str,
     delay_ms: Option<u64>,
 ) -> Result<(), String> {
-    let delay = delay_ms.unwrap_or(0);
+    let human_mode = delay_ms.is_none();
+    let explicit_delay = delay_ms.unwrap_or(0);
 
     for ch in text.chars() {
         if matches!(ch, '\n' | '\r' | '\t') {
@@ -318,8 +320,19 @@ pub async fn type_text_into_active_context(
                 .await?;
         }
 
-        if delay > 0 {
-            tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+        if human_mode {
+            let ms = {
+                let mut rng = rand::thread_rng();
+                let mut ms: u64 = rng.gen_range(30..=80);
+                // 5% chance of a thinking pause
+                if rng.gen_range(0u32..100) < 5 {
+                    ms += rng.gen_range(200..=500);
+                }
+                ms
+            };
+            tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
+        } else if explicit_delay > 0 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(explicit_delay)).await;
         }
     }
 

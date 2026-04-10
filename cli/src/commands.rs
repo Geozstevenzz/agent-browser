@@ -181,9 +181,16 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
         "type" => {
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
                 context: "type".to_string(),
-                usage: "type <selector> <text>",
+                usage: "type <selector> <text> [--fast]",
             })?;
-            Ok(json!({ "id": id, "action": "type", "selector": sel, "text": rest[1..].join(" ") }))
+            let text: String = rest[1..].join(" ");
+            let fast = text.contains("--fast");
+            let clean_text = text.replace("--fast", "").trim().to_string();
+            let mut payload = json!({ "id": id, "action": "type", "selector": sel, "text": clean_text });
+            if fast {
+                payload["delay"] = json!(0);
+            }
+            Ok(payload)
         }
         "hover" => {
             let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
@@ -312,10 +319,16 @@ pub fn parse_command(args: &[String], flags: &Flags) -> Result<Value, ParseError
                     if text.is_empty() {
                         return Err(ParseError::MissingArguments {
                             context: "keyboard type".to_string(),
-                            usage: "keyboard type <text>",
+                            usage: "keyboard type <text> [--fast]",
                         });
                     }
-                    Ok(json!({ "id": id, "action": "keyboard", "subaction": "type", "text": text }))
+                    let fast = text.contains("--fast");
+                    let clean_text = text.replace("--fast", "").trim().to_string();
+                    let mut payload = json!({ "id": id, "action": "keyboard", "subaction": "type", "text": clean_text });
+                    if fast {
+                        payload["delay"] = json!(0);
+                    }
+                    Ok(payload)
                 }
                 "inserttext" | "insertText" => {
                     let text: String = rest[1..].join(" ");
