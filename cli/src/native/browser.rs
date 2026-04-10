@@ -510,6 +510,24 @@ impl BrowserManager {
         self.client
             .send_command_no_params("Page.enable", Some(session_id))
             .await?;
+        // Stealth: inject anti-detection JS before any page scripts run
+        let _ = self
+            .client
+            .send_command(
+                "Page.addScriptToEvaluateOnNewDocument",
+                Some(serde_json::json!({
+                    "source": concat!(
+                        "Object.defineProperty(navigator,'webdriver',{get:()=>false,configurable:true});",
+                        "if(!window.chrome){window.chrome={runtime:{}};}",
+                        "Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5],configurable:true});",
+                        "Object.defineProperty(navigator,'languages',{get:()=>['en-US','en'],configurable:true});",
+                        "const origQuery=window.navigator.permissions.query.bind(window.navigator.permissions);",
+                        "window.navigator.permissions.query=(p)=>p.name==='notifications'?Promise.resolve({state:Notification.permission}):origQuery(p);",
+                    )
+                })),
+                Some(session_id),
+            )
+            .await;
         // Intercept file chooser dialogs so Page.fileChooserOpened events are emitted
         // instead of showing the native OS file picker. Ignored on unsupported engines.
         let _ = self
@@ -549,6 +567,24 @@ impl BrowserManager {
         self.client
             .send_command_no_params("Page.enable", None)
             .await?;
+        // Stealth: inject anti-detection JS before any page scripts run
+        let _ = self
+            .client
+            .send_command(
+                "Page.addScriptToEvaluateOnNewDocument",
+                Some(serde_json::json!({
+                    "source": concat!(
+                        "Object.defineProperty(navigator,'webdriver',{get:()=>false,configurable:true});",
+                        "if(!window.chrome){window.chrome={runtime:{}};}",
+                        "Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5],configurable:true});",
+                        "Object.defineProperty(navigator,'languages',{get:()=>['en-US','en'],configurable:true});",
+                        "const origQuery=window.navigator.permissions.query.bind(window.navigator.permissions);",
+                        "window.navigator.permissions.query=(p)=>p.name==='notifications'?Promise.resolve({state:Notification.permission}):origQuery(p);",
+                    )
+                })),
+                None,
+            )
+            .await;
         let _ = self
             .client
             .send_command(
